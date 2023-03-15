@@ -1,0 +1,8 @@
+langchain
+transformers
+openai
+llama-index
+pandas
+jupyter
+jupytext
+neologdn
