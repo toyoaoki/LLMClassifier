@@ -3,6 +3,7 @@ from llama_index import GPTSimpleVectorIndex, Document, QuestionAnswerPrompt
 from .util import clean_text
 from .data import Inputs, Classes, Outputs, Examples
 import pandas as pd
+import pickle
 
 class Classifier():
     """
@@ -24,10 +25,10 @@ class Classifier():
         self.task = task
         self.classes = Classes(classes, multi_label)
         self.class_prompt = self.classes.get_prompt()
-        self.multi_label = multi_label
-        self.last_prompt = "A:"
+        self.awser_marker = "A:"
+        self.last_prompt = self.awser_marker
         self.template = (
-            "{task}\n"
+            "Q:{task}\n"
             "{classes}\n"
             "{input}\n"
             "{last}"
@@ -36,62 +37,59 @@ class Classifier():
             input_variables=["task", "classes", "input", "last"],
             template=self.template,
         )
+        self.each_example_prompts = None
 
-    def predict(self, X, return_index=True, return_df=False):
+    def predict(self, X, return_wrapper=False):
         """
         分類を行う。LLMが行ったラベル付けの結果のリストを出力する。
         ラベルはlabelsのindexで表される。
         Args:
             X (dict, list[dict], pd.DataFrame): json, jsons or dataframe
-            return_index (bool): indexを返すかどうか
-            return_df (bool): dataframeを返すかどうか
+            return_wrapper (bool): Outputsオブジェクトを返すかどうか
         Return:
             y: list[int] or list[list[int]] or list[str] or list[list[str]]
         """
-        self.inputs = Inputs(X)
-        input_prompts = self.inputs.get_prompts()
+        inputs = Inputs(X)
+        input_prompts = inputs.get_prompts()
         self.prompts = [self.prompt_template.format(task=self.task, classes=self.class_prompt, input=input_prompt, last=self.last_prompt) for input_prompt in input_prompts]
         if hasattr(self, "llama_index"):
-            responses = [self.llama_index.query(prompt, text_qa_template=self.qa_prompt) for prompt in self.prompts]
-            for i, response in enumerate(responses):
-                display(self.inputs.get_df().iloc[i])
-                print(response.source_nodes)
-            responses = [response.response for response in responses]
+            index_responses = [self.llama_index.query(prompt, text_qa_template=self.qa_prompt) for prompt in self.prompts]
+            source_nodes = [index_response.source_nodes for index_response in index_responses]
+            responses = [index_response.response for index_response in index_responses]
         else:
             responses = [self.llm(prompt) for prompt in self.prompts]
-        self.outputs = Outputs.from_resposes(responses, self.classes)
-        if return_index:
-            y = self.outputs.get_indices()
+            source_nodes = [self.each_example_prompts for prompt in self.prompts]
+        outputs = Outputs.from_strs(responses, self.classes, source_nodes)
+        if return_wrapper:
+            y = outputs
         else:
-            y = self.outputs.get_labels()
-        if return_df:
-            df = pd.concat([self.inputs.get_df(), pd.DataFrame({'_y': y})], axis=1)
-            return df
+            y = outputs.get_indices()
         return y
 
-    def fit(self, X, y, few_shot=True):
+    def fit(self, X, y, use_index=False):
         """
         few_shot = True の場合、Xとyをプロンプトに埋め込んで予測を行う
         few_shot = False の場合、GPT-indexを用いて予測を行う
         Args:
             X (dict, list[dict], pd.DataFrame): json, jsons or dataframe
             y (list[int], list[list[int]]): ラベルのindex
-            few_shot (bool): few shotかどうか
+            use_index (bool): llama_indexを用いるかどうか
         Returns:
             self
         """
         inputs = Inputs(X)
-        outputs = Outputs(y, self.classes)
-        self.examples = Examples(inputs, outputs)
-        if few_shot:
-            self.last_prompt = self.examples.get_fewshot_prompt() + "\nA:"
-        else:
-            texts = self.examples.get_each_prompts()
+        outputs = Outputs.from_labels(y, self.classes)
+        examples = Examples(inputs, outputs)
+        if use_index:
+            texts = examples.get_each_prompts()
             documents = documents = [Document(t) for t in texts]
             self.llama_index = GPTSimpleVectorIndex(documents)
-            QA_PROMPT_TMPL = "{query_str}\n" + self.examples.prompt_template + "\nA:"
+            QA_PROMPT_TMPL = "{query_str}\n" + examples.prompt_template + "\n" + self.awser_marker
             self.qa_prompt = QuestionAnswerPrompt(QA_PROMPT_TMPL)
             self.last_prompt = ""
+        else:
+            self.last_prompt = examples.get_whole_prompt() + "\n" + self.awser_marker
+            self.each_example_prompts = examples.get_each_prompts()
         return self
 
     def distrill(self, X):
@@ -102,4 +100,16 @@ class Classifier():
         Returns:
             self
         """
+        return self
+
+    def save(self, path):
+        """
+        モデルを保存する
+        Args:
+            path (str): モデルの保存先のパス
+        Returns:
+            self
+        """
+        with open(path, mode="wb") as f:
+            pickle.dump(self, f)
         return self

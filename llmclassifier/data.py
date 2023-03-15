@@ -65,7 +65,7 @@ class Classes():
     """
     Prompt内のlabel部分をビルドするためのクラス
     """
-    def __init__(self, classes, multi_label=False):
+    def __init__(self, classes, multi_label):
         """
         Args:
             classes (list[str]): ラベルのリスト
@@ -90,85 +90,182 @@ class Classes():
             prompt = f"回答は「{prompt}」のいずれかで答えてください。"
         return prompt
 
-    def extract_label_in(self, string):
-        """
-        string内に含まれるlabelまたはそのリストを抽出する
-
-        Args:
-            string (str): ラベルが含まれる文字列
-        Rteturn:
-            result: str or list[str]
-        """
-        string = clean_text(string)
-        result = [label for label in self.classes if label in string]
-        if not self.multi_label:
-            result = result[0] if result else None
-        return result
-
-    def convert_to_indices(self, labels):
-        """
-        labelsをインデックスに変換する
-
-        Args:
-            other_labels (list[str] or str): ラベルのリスト
-        Return:
-            indices: list[int]
-        """
-        if self.multi_label:
-            indices = [[self.classes.index(label_elem) for label_elem in label] for label in labels]
-        else:
-            indices = [None if label is None else self.classes.index(label) for label in labels]
-        return indices
-
     def _clean(self):
         """
         labels内のテキストをクリーニングする
         """
         self.classes = [clean_text(class_) for class_ in self.classes]
 
-class Outputs():
-    """
-    Outputを扱うためのクラス
-    """
+    def get_classes(self):
+        """
+        labelsを取得する
+        """
+        return self.classes
 
-    def __init__(self, labels, classes):
+class Output():
+    """
+    1つ1つのOutputを扱うためのクラス
+    """
+    def __init__(self, label, classes, str_=None, source_node=None):
         """
         Args:
-            labels (List[str]): 出力ラベルのリスト
+            label (str): 出力ラベル
             classes (Classes): Classesクラス
+            str_ (str): 出力文字列。strから変換された場合はうまくlabelsを取得できない場合があるので確認用に保持しておく
+            source_node (list[dict]): predict時に参照したindexデータのリスト
         """
-        self.labels = labels
+        self.label = label
         self.classes = classes
+        self.multi_label = classes.multi_label
+        self.str = str_
+        self.source_node = source_node
 
-    def get_indices(self):
-        return self.classes.convert_to_indices(self.labels)
+    def get_index(self):
+        if self.multi_label:
+            return [self.classes.get_classes().index(label_elem) for label_elem in self.label]
+        else:
+            return None if self.label is None else self.classes.get_classes().index(self.label)
 
-    def get_labels(self):
-        return self.labels
+    def get_label(self):
+        return self.label
 
-    def to_strs(self):
-        """
-        str化したものを出力する
-        Returns:
-            strs: list[str]
-        """
-        strs = [
-            ", ".join(label) if isinstance(label, list) else label
-            for label in self.get_labels()]
-        return strs
+    def get_str(self):
+        if self.str is None:
+            if self.multi_label:
+                self.str = ", ".join(self.label)
+            else:
+                self.str = self.label if self.label is not None else ""
+        return self.str
+
+    def get_source_node(self):
+        return self.source_node
 
     @classmethod
-    def from_resposes(cls, responses, classes):
+    def from_str(cls, str_, classes, source_node=None):
         """
         LLMのレスポンスからオブジェクトを出力する
         Args:
-            responses (List[str]): LLMのレスポンス
+            str_ (str): 出力文字列(LLMのレスポンス)
+            classes (Classes): Classesクラス
+            source_node (list[dict]): predict時に参照したindexデータのリスト
+        Returns:
+            obj: Output
+        """
+        str_ = clean_text(str_)
+        label = [label for label in classes.get_classes() if label in str_]
+        if not classes.multi_label:
+            label = label[0] if len(label) > 0 else None
+        obj = cls(label, classes, str_, source_node)
+        return obj
+
+    @classmethod
+    def from_index(cls, index, classes):
+        """
+        indexからオブジェクトを出力する
+        Args:
+            index (int or list[int]): index
+            classes (Classes): Classesクラス
+        Returns:
+            obj: Output
+        """
+        if classes.multi_label:
+            label = [classes.get_classes()[index_elem] for index_elem in index]
+        else:
+            label = None if index is None else classes.get_classes()[index]
+        obj = cls(label, classes)
+        return obj
+
+    @classmethod
+    def from_label(cls, label, classes):
+        """
+        labelからオブジェクトを出力する
+        Args:
+            label (str or list[str]): label
+            classes (Classes): Classesクラス
+        Returns:
+            obj: Output
+        """
+        if classes.multi_label:
+            label = [clean_text(label_elem) for label_elem in label]
+        else:
+            label = clean_text(label) if label is not None else None
+        obj = cls(label, classes)
+        return obj
+
+class Outputs():
+    """
+    Outputsを扱うためのクラス
+    """
+
+    def __init__(self, outputs):
+        """
+        Args:
+            outputs (list[Output]): Outputのリスト
+        """
+        self.outputs = outputs
+
+    def get_indices(self):
+        return [output.get_index() for output in self.outputs]
+
+    def get_labels(self):
+        return [output.get_label() for output in self.outputs]
+
+    def get_strs(self):
+        return [output.get_str() for output in self.outputs]
+
+    def get_source_nodes(self):
+        return [output.get_source_node() for output in self.outputs]
+
+    def get_df(self):
+        df = pd.DataFrame({
+            "index": self.get_indices(),
+            "label": self.get_labels(),
+            "str": self.get_strs(),
+            "source_node": self.get_source_nodes()
+            })
+        return df
+
+    @classmethod
+    def from_strs(cls, strs, classes, source_nodes):
+        """
+        LLMのレスポンスからオブジェクトを出力する
+        Args:
+            strs (List[str]): 出力文字列のリスト(LLMのレスポンス)
+            classes (Classes): Classesクラス
+            source_nodes (list[list[dict]]): predict時に参照したindexデータの集まり
+        Returns:
+            obj: Outputs
+        """
+        outputs = [Output.from_str(str_, classes, source_node) for str_, source_node in zip(strs, source_nodes)]
+        obj = cls(outputs)
+        return obj
+
+    @classmethod
+    def from_labels(cls, labels, classes):
+        """
+        ラベルからオブジェクトを出力する
+        Args:
+            labels (list[str] or list[list[str]]): ラベルのリスト
             classes (Classes): Classesクラス
         Returns:
             obj: Outputs
         """
-        labels = [classes.extract_label_in(response) for response in responses]
-        obj = cls(labels, classes)
+        outputs = [Output.from_label(label, classes) for label in labels]
+        obj = cls(outputs)
+        return obj
+
+    @classmethod
+    def from_indices(cls, indices, classes):
+        """
+        indexからオブジェクトを出力する
+        Args:
+            indices (list[int] or list[list[int]]): indexのリスト
+            classes (Classes): Classesクラス
+        Returns:
+            obj: Outputs
+        """
+        outputs = [Output.from_index(index, classes) for index in indices]
+        obj = cls(outputs)
         return obj
 
 class Examples():
@@ -186,12 +283,13 @@ class Examples():
         self.outputs = outputs
         self.prompt_template = (
             "回答例は以下の通りです。\n"
+            "'Q_ex:'以降の情報について、同様の質問をした時の回答を'A_ex:'以降に示しています。\n"
             "---------------------\n"
             "{context_str}\n"
             "---------------------\n"
             "この回答例が使えるなら考慮に入れ、使えない場合は考慮に入れずに答えてください。"
             )
-    
+
     def get_each_prompts(self):
         """
         それぞれのexampleのpromptを取得する
@@ -199,29 +297,25 @@ class Examples():
             prompts: list[str]
         """
         input_prompts = self.inputs.get_prompts()
-        output_prompts = self.outputs.to_strs()
-        # prompt_template = (
-        #     "入力:\n"
-        #     "{input}\n"
-        #     "出力:\n"
-        #     "{output}"
-        #     )
+        output_prompts = self.outputs.get_strs()
         prompt_template = (
-            "「{input}」という情報の分類は「{output}」"
+            "Q_ex:{input}\n"
+            "A_ex:{output}"
             )
         prompts = [
-            prompt_template.format(input=input_prompt, output=output_prompt)
-            for input_prompt, output_prompt in zip(input_prompts, output_prompts)
+            prompt_template.format(i=i, input=input_prompt, output=output_prompt)
+            for i, (input_prompt, output_prompt) in enumerate(zip(input_prompts, output_prompts))
             ]
         return prompts
 
-    def get_fewshot_prompt(self):
+    def get_whole_prompt(self):
         """
         examplesのpromptを取得する
         Return:
             prompt: str
         """
         prompts = self.get_each_prompts()
+        prompts = [f"{i+1}.\n{prompt}" for i, prompt in enumerate(prompts)]
         prompt = "\n".join(prompts)
         prompt = self.prompt_template.format(context_str=prompt)
         return prompt
