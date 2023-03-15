@@ -1,6 +1,6 @@
 # LLMClassifier
 
-ジェネラティブなLLMClassifierはLLMを使ったClassifierを構築します。
+LLMClassifierはジェネラティブなLLMを使ったClassifierを構築します。
 
 ジェネラティブLLMを分類器として使用し、システムなどに組み込む場合には以下の課題があります（2023/3/12現在）
 - 出力形式 : 返答は文字列型であり、表記ブレも存在するため、そのままでは分類に使用できません。
