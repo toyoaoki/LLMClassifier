@@ -11,6 +11,7 @@ LLMClassifierはジェネラティブなLLMを使ったClassifierを構築しま
 - 学習 : Llama(GPT)Indexを用いてより多くの学習データを活用できるようにしました。
 
 また、マルチラベル分類や、通常のFewShot学習にも対応しています。
+更に、引数を適切に設定することで、一旦英語に翻訳してから分類することも可能です。日本語だと精度が低い場合にお使いください。
 
 # How to use
 
@@ -25,7 +26,6 @@ pip install git+https://github.com/toyoaoki/llmclassifier.git@main
 # TODO
 
 今後は下記に対応する予定です。
-- 出力方法の整理 : 出力形式を変えるごとにLLMにクエリを投げる形になっている課題を解決する
 - 学習機能の改善 : 現状のGPT-indexだと類似度をうまく捉えられていないと思われるため改善する
 - 別モデルによる学習 : Huggingface Transformerを用いて分類結果を学習し、モデルを出力する
 

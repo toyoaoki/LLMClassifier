@@ -1,5 +1,5 @@
 import pandas as pd
-from .util import clean_text
+from util import clean_text, recursive_apply
 
 
 class Inputs:
@@ -45,9 +45,7 @@ class Inputs:
         """
         jsons内のテキストをクリーニングする
         """
-        self.jsons = [
-            {clean_text(key): clean_text(value) for key, value in json.items()}
-            for json in self.jsons]
+        return self.apply(clean_text)
 
     def get_df(self):
         """
@@ -61,40 +59,76 @@ class Inputs:
         """
         return self.jsons
 
+    def apply(self, func, *args, **kwargs):
+        """
+        inputにfuncを適用する
+        Args:
+            func (function): 適用する関数
+            args: 関数に渡す引数
+            kwargs: 関数に渡すキーワード引数
+        Retrun:
+            self (Inputs): 自身のインスタンス
+        """
+        df = recursive_apply(index=0)(func)(self.get_df(), *args, **kwargs)
+        self.jsons = df.to_dict(orient="records")
+        return self
+
+    def save(self, path):
+        """
+        csvを保存する
+        Args:
+            path (str): 保存先のパス
+        """
+        self.get_df().to_csv(path, encoding="utf-8_sig", index=False)
+
 class Classes():
     """
     Prompt内のlabel部分をビルドするためのクラス
     """
-    def __init__(self, classes, multi_label):
+    def __init__(self, classes, original_classes, multi_label):
         """
         Args:
             classes (list[str]): ラベルのリスト
+            original_classes (list[str]): 元のラベルのリスト
             multi_label (bool): マルチラベルかどうか
         """
         assert isinstance(classes, list), "classes must be list"
         self.classes = classes
+        self.original_classes = original_classes
         self._clean()
         self.multi_label = multi_label
 
     def get_prompt(self):
         """
         labelsを単一ラベル分類用のpromptに埋め込む。
-        ["label1", "label2", ...] -> "label1, label2, ..."
+        ["label1", "label2", ...] -> "'label1', 'label2', ..."
         Return:
             prompt: str
         """
-        prompt = ", ".join(self.classes)
+        classes = [f"'{class_}'" for class_ in self.classes]
+        prompt = ", ".join(classes)
         if self.multi_label:
-            prompt = f"回答は「{prompt}」のいずれかの組み合わせで答えてください。','で区切って0個以上回答してください。"
+            prompt = ("Answer by choosing zero or more combinations from the following candidates enclosed in quotes and separated by commas.\n"
+            "For each chosen candidate, output the exact same text, including capitalization, spacing, and special characters, as well as the quotation marks surrounding the candidate.\n"
+            "The answer should be output with candidates separated by commas.\n"
+            "The candidates are as follows:\n"
+            "---------\n"
+            f"{prompt}\n"
+            "---------\n")
         else:
-            prompt = f"回答は「{prompt}」のいずれかで答えてください。"
+            prompt = ("Select one of the following candidates enclosed in quotation marks and separated by commas.\n"
+            "For the chosen candidate, output the exact same text, including capitalization, spacing, and special characters, as well as the quotation marks surrounding the candidate.\n"
+            "The candidates are as follows:\n"
+            "---------\n"
+            f"{prompt}\n"
+            "---------\n")
         return prompt
 
     def _clean(self):
         """
         labels内のテキストをクリーニングする
         """
-        self.classes = [clean_text(class_) for class_ in self.classes]
+        self.classes = clean_text(self.classes, strict=True)
 
     def get_classes(self):
         """
@@ -102,32 +136,36 @@ class Classes():
         """
         return self.classes
 
+    def get_original_classes(self):
+        """
+        元のlabelsを取得する
+        """
+        return self.original_classes
+
 class Output():
     """
     1つ1つのOutputを扱うためのクラス
     """
-    def __init__(self, label, classes, str_=None, source_node=None):
+    def __init__(self, index, classes, str_=None, source_node=None):
         """
         Args:
-            label (str): 出力ラベル
+            index (int or list[int]): 出力ラベル
             classes (Classes): Classesクラス
             str_ (str): 出力文字列。strから変換された場合はうまくlabelsを取得できない場合があるので確認用に保持しておく
             source_node (list[dict]): predict時に参照したindexデータのリスト
         """
-        self.label = label
+        self.index = index
         self.classes = classes
         self.multi_label = classes.multi_label
         self.str = str_
         self.source_node = source_node
 
     def get_index(self):
-        if self.multi_label:
-            return [self.classes.get_classes().index(label_elem) for label_elem in self.label]
-        else:
-            return None if self.label is None else self.classes.get_classes().index(self.label)
+        return self.index
 
     def get_label(self):
-        return self.label
+        label = recursive_apply(index=0)(lambda x: self.classes.get_classes()[x])(self.index)
+        return label
 
     def get_str(self):
         if self.str is None:
@@ -140,6 +178,10 @@ class Output():
     def get_source_node(self):
         return self.source_node
 
+    def get_original_label(self):
+        label = recursive_apply(index=0)(lambda x: self.classes.get_original_classes()[x])(self.index)
+        return label
+
     @classmethod
     def from_str(cls, str_, classes, source_node=None):
         """
@@ -151,15 +193,15 @@ class Output():
         Returns:
             obj: Output
         """
-        str_ = clean_text(str_)
-        label = [label for label in classes.get_classes() if label in str_]
+        str_ = clean_text(str_, strict=True)
+        index = [i for i, label in enumerate(classes.get_classes()) if label in str_]
         if not classes.multi_label:
-            label = label[0] if len(label) > 0 else None
-        obj = cls(label, classes, str_, source_node)
+            index = index[0] if len(index) > 0 else None
+        obj = cls(index, classes, str_, source_node)
         return obj
 
     @classmethod
-    def from_index(cls, index, classes):
+    def from_index(cls, index, classes, source_node=None):
         """
         indexからオブジェクトを出力する
         Args:
@@ -168,15 +210,11 @@ class Output():
         Returns:
             obj: Output
         """
-        if classes.multi_label:
-            label = [classes.get_classes()[index_elem] for index_elem in index]
-        else:
-            label = None if index is None else classes.get_classes()[index]
-        obj = cls(label, classes)
+        obj = cls(index, classes, source_node=source_node)
         return obj
 
     @classmethod
-    def from_label(cls, label, classes):
+    def from_label(cls, label, classes, source_node=None):
         """
         labelからオブジェクトを出力する
         Args:
@@ -185,11 +223,9 @@ class Output():
         Returns:
             obj: Output
         """
-        if classes.multi_label:
-            label = [clean_text(label_elem) for label_elem in label]
-        else:
-            label = clean_text(label) if label is not None else None
-        obj = cls(label, classes)
+        label = clean_text(label, strict=True)
+        index = recursive_apply(index=1)(classes.get_classes().index)(label)
+        obj = cls(index, classes, source_node=source_node)
         return obj
 
 class Outputs():
@@ -216,14 +252,26 @@ class Outputs():
     def get_source_nodes(self):
         return [output.get_source_node() for output in self.outputs]
 
-    def get_df(self):
+    def get_df(self, add_original_label=False):
         df = pd.DataFrame({
             "index": self.get_indices(),
             "label": self.get_labels(),
             "str": self.get_strs(),
             "source_node": self.get_source_nodes()
             })
+        if add_original_label:
+            df["original_label"] = self.get_original_labels()
         return df
+
+    def set_original_labels(self):
+        self.original_labels = self.get_original_labels()
+
+    def save(self, path):
+        df = self.get_df()
+        df.to_csv(path, encoding="utf-8_sig", index=False)
+
+    def get_original_labels(self):
+        return [output.get_original_label() for output in self.outputs]
 
     @classmethod
     def from_strs(cls, strs, classes, source_nodes):
@@ -282,12 +330,12 @@ class Examples():
         self.inputs = inputs
         self.outputs = outputs
         self.prompt_template = (
-            "回答例は以下の通りです。\n"
-            "'Q_ex:'以降の情報について、同様の質問をした時の回答を'A_ex:'以降に示しています。\n"
-            "---------------------\n"
+            "Here is an example of an answer:\n"
+            "For information after 'Q_ex:', the desired answer when the same question was asked earlier is shown after 'A_ex:'.\n"
+            "---------\n"
             "{context_str}\n"
-            "---------------------\n"
-            "この回答例が使えるなら考慮に入れ、使えない場合は考慮に入れずに答えてください。"
+            "---------\n"
+            "If this example answer can be used, consider it. If not, answer without considering it"
             )
 
     def get_each_prompts(self):
