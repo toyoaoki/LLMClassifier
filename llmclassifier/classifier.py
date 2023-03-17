@@ -3,9 +3,9 @@ from llama_index import GPTSimpleVectorIndex, Document, QuestionAnswerPrompt
 import pandas as pd
 import pickle
 
-from util import clean_text, recursive_apply
-from data import Inputs, Classes, Outputs, Examples
-from translator import LLMTranslator
+from .util import clean_text, recursive_apply
+from .data import Inputs, Classes, Outputs, Examples
+from .translator import LLMTranslator
 
 class LLMClassifier():
     """
