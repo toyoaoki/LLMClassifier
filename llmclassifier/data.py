@@ -1,6 +1,6 @@
 import pandas as pd
-from util import clean_text, recursive_apply
 
+from .util import clean_text, recursive_apply
 
 class Inputs:
     """

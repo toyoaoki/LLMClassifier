@@ -1,7 +1,8 @@
-from classifier import LLMClassifier
 import pandas as pd
 from langchain.llms import OpenAI
 import os
+
+from classifier import LLMClassifier
 
 # llmの設定
 llm = OpenAI(model_name="gpt-3.5-turbo", openai_api_key=os.environ["OPENAI_API_KEY"])
